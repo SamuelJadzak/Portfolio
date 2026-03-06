@@ -1,0 +1,15 @@
+meta {
+  name: Get Single Post
+  type: http
+  seq: 3
+}
+
+get {
+  url: 127.0.0.1:8080/api/posts/2
+  body: none
+  auth: inherit
+}
+
+settings {
+  encodeUrl: true
+}
