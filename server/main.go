@@ -7,22 +7,45 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"time"
 
+	"example/data-access/auth"
 	"example/data-access/routes"
 	"fmt"
 )
 
 // TODO: need to also investigate passing context
 // TODO: auth
-func NewServer(postStore *routes.PostStore) http.Handler {
+func NewServer(postStore *routes.PostStore, authStore *auth.AuthStore) http.Handler {
 	mux := http.NewServeMux()
 	routes.AddRoutes(
 		mux,
 		postStore,
+		authStore,
 	)
 	var handler http.Handler = mux
-	// handler = someMiddleware(handler)
+	handler = authMiddleWare(handler)
+	handler = timeoutMiddleWare(handler)
 	return handler
+}
+
+func timeoutMiddleWare(next http.Handler) http.Handler {
+	return http.TimeoutHandler(next, 2*time.Second, "timeout")
+}
+
+func authMiddleWare(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/login":
+		default:
+			token := r.Header.Get("Authorization")
+			if _, err := auth.ValidateToken(token); err != nil {
+				http.Error(w, "invalid token", http.StatusUnauthorized)
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func main() {
@@ -34,9 +57,12 @@ func main() {
 		log.Fatal(err)
 	}
 	defer db.Close()
-	postStore := &routes.PostStore{Db: db}
+	postStore := &routes.PostStore{Db: db, Location: env.PostLocation.GetValue()}
 
-	srv := NewServer(postStore)
+	authStore := &auth.AuthStore{Db: db, Location: env.AuthLocation.GetValue()}
+	auth.InitAdminPwd(authStore)
+
+	srv := NewServer(postStore, authStore)
 	httpServer := &http.Server{
 		Addr:    net.JoinHostPort(env.ServerHost.GetValue(), env.ServerPort.GetValue()),
 		Handler: srv,
@@ -53,10 +79,3 @@ func buildConnectionStr() string {
 		env.PostgresDatabase.GetValue(),
 		env.PostgresUser.GetValue())
 }
-
-// func someMiddleware(next http.Handler) http.Handler {
-// 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-
-// 		next.ServeHTTP(w, r)
-// 	})
-// }

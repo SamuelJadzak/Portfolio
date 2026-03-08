@@ -1,23 +1,23 @@
 package routes
 
 import (
-	"log"
+	"context"
 
 	"github.com/lib/pq"
 )
 
-func getAllPosts(s *PostStore) ([]post, error) {
+func getAllPosts(ctx context.Context, s *PostStore) ([]post, error) {
 	posts := []post{}
-	rows, err := s.Db.Query("select * from posts")
-	if err != nil || rows == nil {
-		log.Fatal(err)
+	rows, err := s.Db.QueryContext(ctx, "select * from "+s.Location)
+	if err != nil {
+		return nil, err
 	}
+	defer rows.Close()
 
 	for rows.Next() {
 		var post post
 		var _throwaway []string
-		err := rows.Scan(&post.ID, &post.Title, pq.Array(&_throwaway))
-		if err != nil {
+		if err := rows.Scan(&post.ID, &post.Title, pq.Array(&_throwaway)); err != nil {
 			return nil, err
 		}
 		posts = append(posts, post)

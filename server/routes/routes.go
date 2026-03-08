@@ -2,12 +2,16 @@ package routes
 
 import (
 	"database/sql"
+	"encoding/json"
+	"example/data-access/auth"
 	"net/http"
 	"strconv"
+	"time"
 )
 
 type PostStore struct {
-	Db *sql.DB
+	Db       *sql.DB
+	Location string
 }
 
 type post struct {
@@ -19,13 +23,13 @@ type post struct {
 func AddRoutes(
 	mux *http.ServeMux,
 	postStore *PostStore,
+	authStore *auth.AuthStore,
 ) {
 	postsHandler := func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case "GET":
-			posts, err := getAllPosts(postStore)
+			posts, err := getAllPosts(r.Context(), postStore)
 			if err != nil {
-				http.NotFound(w, r)
 				return
 			}
 			for _, post := range posts {
@@ -58,7 +62,43 @@ func AddRoutes(
 		}
 	}
 
+	loginHandler := func(w http.ResponseWriter, r *http.Request) {
+		var creds struct {
+			Username string `json:"username"`
+			Password string `json:"password"`
+		}
+		switch r.Method {
+		case "POST":
+			if err := json.NewDecoder(r.Body).Decode(&creds); err != nil {
+				http.Error(w, "Invalid request", http.StatusBadRequest)
+				return
+			}
+			if !auth.CheckCredentials(authStore, creds.Username, creds.Password) {
+				http.Error(w, "Invalid credentials", http.StatusUnauthorized)
+				return
+			}
+			token, err := auth.CreateToken(creds.Username)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+
+			http.SetCookie(w, &http.Cookie{
+				Name:     "token",
+				Value:    token,
+				HttpOnly: true,
+				Secure:   true,
+				SameSite: http.SameSiteLaxMode,
+				Expires:  time.Now().Add(time.Hour),
+			})
+
+		default:
+			http.NotFound(w, r)
+		}
+	}
+
 	mux.HandleFunc("/api/posts/", postsHandler)
 	mux.HandleFunc("/api/posts/{id}", singlePostHandler)
+	mux.HandleFunc("/api/login", loginHandler)
 	mux.Handle("/", http.NotFoundHandler())
 }
