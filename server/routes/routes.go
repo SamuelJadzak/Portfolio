@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"strconv"
 	"time"
+
+	"github.com/golang-jwt/jwt/v5"
 )
 
 type PostStore struct {
@@ -18,6 +20,11 @@ type post struct {
 	ID    int
 	Title string
 	Body  []string
+}
+
+type UserClaims struct {
+	Username string `json:"username"`
+	jwt.RegisteredClaims
 }
 
 func AddRoutes(
@@ -77,7 +84,12 @@ func AddRoutes(
 				http.Error(w, "Invalid credentials", http.StatusUnauthorized)
 				return
 			}
-			token, err := auth.CreateToken(creds.Username)
+			refreshToken, err := auth.CreateToken(creds.Username, "refresh")
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			accessToken, err := auth.CreateToken(creds.Username, "access")
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
@@ -85,20 +97,41 @@ func AddRoutes(
 
 			http.SetCookie(w, &http.Cookie{
 				Name:     "token",
-				Value:    token,
+				Value:    refreshToken,
 				HttpOnly: true,
 				Secure:   true,
 				SameSite: http.SameSiteLaxMode,
-				Expires:  time.Now().Add(time.Hour),
+				Expires:  time.Now().Add(time.Hour * 24 * 7),
 			})
-
+			w.Header().Set("Authorization", "Bearer "+accessToken)
 		default:
 			http.NotFound(w, r)
 		}
 	}
 
+	refreshHandler := func(w http.ResponseWriter, r *http.Request) {
+		refreshToken, err := r.Cookie("token")
+		if err != nil {
+			http.Error(w, "invalid token", http.StatusUnauthorized)
+			return
+		}
+		_, claims, err := auth.ValidateToken(refreshToken.Value, "refresh")
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusUnauthorized)
+			return
+		}
+
+		accessToken, err := auth.CreateToken(claims.Username, "access")
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Authorization", "Bearer "+accessToken)
+	}
+
 	mux.HandleFunc("/api/posts/", postsHandler)
 	mux.HandleFunc("/api/posts/{id}", singlePostHandler)
 	mux.HandleFunc("/api/login", loginHandler)
+	mux.HandleFunc("/api/refresh", refreshHandler)
 	mux.Handle("/", http.NotFoundHandler())
 }
