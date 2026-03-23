@@ -7,7 +7,11 @@ meta {
 get {
   url: 127.0.0.1:8080/api/posts/2
   body: json
-  auth: inherit
+  auth: bearer
+}
+
+auth:bearer {
+  token: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VybmFtZSI6ImFkbWluIiwidHlwZSI6ImFjY2VzcyIsImV4cCI6MTc3MzI1NDQ3M30.GJd_A9u-b6aeoGmVsEgm450XyUuizd9tJFjufIqkFFU
 }
 
 settings {

@@ -29,7 +29,7 @@ export class BlogApiService {
       .pipe(tap((response: any) => this.postDataCache.set(id, response)));
   }
 
-  getPostsMetaData(): Observable<PostMetaData[]> {
-    return this.http.get<PostMetaData[]>(`/api/posts`);
+  getPostsMetaData(): Observable<PostMetaData> {
+    return this.http.get<PostMetaData>(`/api/posts`);
   }
 }

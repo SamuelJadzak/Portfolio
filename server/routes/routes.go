@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"example/data-access/auth"
+	"example/data-access/helpers"
 	"net/http"
 	"strconv"
 	"time"
@@ -16,10 +17,14 @@ type PostStore struct {
 	Location string
 }
 
-type post struct {
+type PostMeta struct {
 	ID    int
 	Title string
-	Body  []string
+}
+
+type Post struct {
+	PostMeta
+	Body []string
 }
 
 type UserClaims struct {
@@ -35,13 +40,9 @@ func AddRoutes(
 	postsHandler := func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case "GET":
-			posts, err := getAllPosts(r.Context(), postStore)
-			if err != nil {
-				return
-			}
-			for _, post := range posts {
-				_, _ = w.Write([]byte(post.Title + "\n"))
-			}
+			r0 := helpers.Try(getAllPosts(r.Context(), postStore))
+			r1 := helpers.Bind(r0, func(posts []PostMeta) helpers.Result[[]byte] { return helpers.Try(helpers.JsonMarshal(posts)) })
+			matchJson(w, r1)
 		default:
 			http.NotFound(w, r)
 		}
@@ -50,20 +51,10 @@ func AddRoutes(
 	singlePostHandler := func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case "GET":
-			id, err := strconv.Atoi(r.PathValue("id"))
-			if err != nil {
-				http.NotFound(w, r)
-				return
-			}
-			post, err := getSinglePost(postStore, id)
-			if err != nil {
-				http.NotFound(w, r)
-				return
-			}
-			_, _ = w.Write([]byte(post.Title + "\n"))
-			for _, line := range post.Body {
-				_, _ = w.Write([]byte(line + "\n"))
-			}
+			r0 := helpers.Try(strconv.Atoi(r.PathValue("id")))
+			r1 := helpers.Bind(r0, func(id int) helpers.Result[Post] { return helpers.Try(getSinglePost(postStore, id)) })
+			r2 := helpers.Bind(r1, func(post Post) helpers.Result[[]byte] { return helpers.Try(helpers.JsonMarshal(post)) })
+			matchJson(w, r2)
 		default:
 			http.NotFound(w, r)
 		}
@@ -76,57 +67,46 @@ func AddRoutes(
 		}
 		switch r.Method {
 		case "POST":
-			if err := json.NewDecoder(r.Body).Decode(&creds); err != nil {
-				http.Error(w, "Invalid request", http.StatusBadRequest)
-				return
-			}
-			if !auth.CheckCredentials(authStore, creds.Username, creds.Password) {
-				http.Error(w, "Invalid credentials", http.StatusUnauthorized)
-				return
-			}
-			refreshToken, err := auth.CreateToken(creds.Username, "refresh")
-			if err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-				return
-			}
-			accessToken, err := auth.CreateToken(creds.Username, "access")
-			if err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-				return
-			}
-
-			http.SetCookie(w, &http.Cookie{
-				Name:     "token",
-				Value:    refreshToken,
-				HttpOnly: true,
-				Secure:   true,
-				SameSite: http.SameSiteLaxMode,
-				Expires:  time.Now().Add(time.Hour * 24 * 7),
+			r0 := helpers.TryVoid(json.NewDecoder(r.Body).Decode(&creds))
+			r1 := helpers.Then(r0, func() helpers.Result[struct{}] {
+				return helpers.TryVoid(auth.CheckCredentials(authStore, creds.Username, creds.Password))
 			})
-			w.Header().Set("Authorization", "Bearer "+accessToken)
+			r2 := helpers.Then(r1, func() helpers.Result[string] { return helpers.Try(auth.CreateToken(creds.Username, "refresh")) })
+			r3 := helpers.Bind(r2, func(refreshToken string) helpers.Result[[]byte] {
+				return helpers.Bind(helpers.Try(auth.CreateToken(creds.Username, "access")), func(accessToken string) helpers.Result[[]byte] {
+					return helpers.Try(helpers.JsonMarshal(map[string]string{"access_token": accessToken}))
+				})
+			})
+			helpers.Match(r3, func(body []byte) {
+				r2Success := r2.(helpers.Success[string])
+				setCookie(w, r2Success.Data)
+				if err := helpers.WriteJSON(w, append(body, '\n')); err != nil {
+					http.Error(w, err.Error(), http.StatusInternalServerError)
+				}
+			}, func(err helpers.Error) { http.Error(w, err.Error(), helpers.ErrorCodeToHttp(err.Code)) })
+
 		default:
 			http.NotFound(w, r)
 		}
 	}
 
 	refreshHandler := func(w http.ResponseWriter, r *http.Request) {
-		refreshToken, err := r.Cookie("token")
-		if err != nil {
-			http.Error(w, "invalid token", http.StatusUnauthorized)
-			return
+		switch r.Method {
+		case "GET":
+			r0 := helpers.Try(r.Cookie("token"))
+			r1 := helpers.Bind(r0, func(cookie *http.Cookie) helpers.Result[*auth.CustomClaims] {
+				return helpers.Try(auth.ValidateToken(cookie.Value, "refresh"))
+			})
+			r2 := helpers.Bind(r1, func(claims *auth.CustomClaims) helpers.Result[string] {
+				return helpers.Try(auth.CreateToken(claims.Username, "access"))
+			})
+			r3 := helpers.Bind(r2, func(token string) helpers.Result[[]byte] {
+				return helpers.Try(helpers.JsonMarshal(map[string]string{"access_token": token}))
+			})
+			matchJson(w, r3)
+		default:
+			http.NotFound(w, r)
 		}
-		_, claims, err := auth.ValidateToken(refreshToken.Value, "refresh")
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusUnauthorized)
-			return
-		}
-
-		accessToken, err := auth.CreateToken(claims.Username, "access")
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		w.Header().Set("Authorization", "Bearer "+accessToken)
 	}
 
 	mux.HandleFunc("/api/posts/", postsHandler)
@@ -134,4 +114,25 @@ func AddRoutes(
 	mux.HandleFunc("/api/login", loginHandler)
 	mux.HandleFunc("/api/refresh", refreshHandler)
 	mux.Handle("/", http.NotFoundHandler())
+}
+
+func setCookie(w http.ResponseWriter, token string) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     "token",
+		Value:    token,
+		Path:     "/",
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+		Expires:  time.Now().Add(time.Hour * 24 * 7),
+	})
+}
+
+func matchJson(w http.ResponseWriter, r helpers.Result[[]byte]) {
+	helpers.Match(r, func(body []byte) {
+		if err := helpers.WriteJSON(w, append(body, '\n')); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
+	}, func(err helpers.Error) {
+		http.Error(w, err.Error(), helpers.ErrorCodeToHttp(err.Code))
+	})
 }

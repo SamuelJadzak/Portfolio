@@ -44,16 +44,16 @@ func CreateToken(username string, tokenType string) (string, error) {
 	return signedToken, nil
 }
 
-func ValidateToken(tokenString string, tokenType string) (*jwt.Token, *CustomClaims, error) {
+func ValidateToken(tokenString string, tokenType string) (*CustomClaims, error) {
 	cleanTokenString := strings.TrimPrefix(tokenString, "Bearer ")
 	validMethods := []string{"HS256"}
 	parser := jwt.NewParser(jwt.WithValidMethods(validMethods))
 	claims := &CustomClaims{}
-	token, err := parser.ParseWithClaims(cleanTokenString, claims, myKeyFunc(tokenType))
+	_, err := parser.ParseWithClaims(cleanTokenString, claims, myKeyFunc(tokenType))
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	return token, claims, nil
+	return claims, nil
 }
 
 func myKeyFunc(tokenType string) func(token *jwt.Token) (any, error) {
@@ -84,20 +84,19 @@ func getSecret(tokenType string) (string, error) {
 	return secret, nil
 }
 
-func comparePasswords(hashedPwd []byte, plainPwd []byte) bool {
+func comparePasswords(hashedPwd []byte, plainPwd []byte) error {
 	err := bcrypt.CompareHashAndPassword(hashedPwd, plainPwd)
 	if err != nil {
-		log.Println(err)
-		return false
+		return err
 	}
-	return true
+	return nil
 }
 
-func CheckCredentials(authStore *AuthStore, username string, password string) bool {
+func CheckCredentials(authStore *AuthStore, username string, password string) error {
 	var hashedPwd string
 	err := authStore.Db.QueryRow("SELECT password FROM "+authStore.Location+" WHERE username = $1", username).Scan(&hashedPwd)
 	if err != nil {
-		return false
+		return err
 	}
 	return comparePasswords([]byte(hashedPwd), []byte(password))
 }

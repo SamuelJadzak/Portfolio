@@ -7,11 +7,13 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"time"
 
 	"example/data-access/auth"
+	"example/data-access/middleware"
 	"example/data-access/routes"
 	"fmt"
+
+	"github.com/rs/cors"
 )
 
 func NewServer(postStore *routes.PostStore, authStore *auth.AuthStore) http.Handler {
@@ -22,70 +24,25 @@ func NewServer(postStore *routes.PostStore, authStore *auth.AuthStore) http.Hand
 		authStore,
 	)
 	var handler http.Handler = mux
-	handler = authMiddleWare(handler)
-	handler = timeoutMiddleWare(handler)
-	return handler
-}
+	handler = middleware.AuthMiddleWare(handler)
+	handler = middleware.TimeoutMiddleWare(handler)
+	// handler = cors.Default().Handler(handler)
 
-func timeoutMiddleWare(next http.Handler) http.Handler {
-	return http.TimeoutHandler(next, 2*time.Second, "timeout")
-}
-
-func authMiddleWare(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/api/login":
-			next.ServeHTTP(w, r)
-			return
-		case "/api/refresh":
-			token, err := r.Cookie("token")
-			if err != nil {
-				http.Error(w, "missing token", http.StatusUnauthorized)
-				return
-			}
-			_, claims, err := auth.ValidateToken(token.Value, "refresh")
-			if err != nil {
-				http.Error(w, err.Error(), http.StatusUnauthorized)
-				return
-			}
-			if err := checkClaims(claims, "refresh"); err != nil {
-				http.Error(w, err.Error(), http.StatusUnauthorized)
-				return
-			}
-			next.ServeHTTP(w, r)
-			return
-		default:
-			token := r.Header.Get("Authorization")
-			if token == "" {
-				http.Error(w, "missing token", http.StatusUnauthorized)
-				return
-			}
-			_, claims, err := auth.ValidateToken(token, "access")
-			if err != nil {
-				http.Error(w, err.Error(), http.StatusUnauthorized)
-				return
-			}
-			if err := checkClaims(claims, "access"); err != nil {
-				http.Error(w, err.Error(), http.StatusUnauthorized)
-				return
-			}
-			next.ServeHTTP(w, r)
-			return
-		}
+	c := cors.New(cors.Options{
+		AllowedOrigins: []string{"http://localhost:4200"}, // Your frontend domain
+		// Set Access-Control-Allow-Methods here
+		AllowedMethods: []string{
+			http.MethodGet,
+			http.MethodPost,
+			http.MethodPut,
+			http.MethodDelete,
+			http.MethodOptions,
+		},
+		AllowedHeaders:   []string{"Content-Type", "Authorization"},
+		AllowCredentials: true,
 	})
-}
 
-func checkClaims(claims *auth.CustomClaims, tokenType string) error {
-	if claims.Type != tokenType {
-		return fmt.Errorf("invalid token type")
-	}
-	if claims.Username == "" {
-		return fmt.Errorf("invalid username")
-	}
-	if claims.RegisteredClaims.ExpiresAt.Before(time.Now()) {
-		return fmt.Errorf("token expired")
-	}
-	return nil
+	return c.Handler(handler)
 }
 
 func main() {
